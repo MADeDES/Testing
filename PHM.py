@@ -12,7 +12,7 @@ SYMP = "Symptom"
 BOTH = "Both"
 COMPONENT = "Component"
 FAILURE = "Failure"
-FM_LABELS = ['_FailureMode_uid', 'Diagnostic Group', 'Component', 'Flow Property', 'Failure']
+FM_LABELS = ['_FailureMode__uid', 'Diagnostic Group', 'Component', 'Flow Property', 'Failure']
 
 
 def get_failure_mode_list(pt):
@@ -39,7 +39,6 @@ def search_value_in_col_idx(ws, search_string, col_idx=1):
         if ws[row][col_idx].value == search_string:
             return col_idx, row
     return col_idx, None
-
 
 def search_value_in_row_index(ws, search_string, row=1):
     for cell in ws[row]:
@@ -68,8 +67,27 @@ def cursor_len(cursor):
         i += 1
     return i
 
+def fm_stats(pt):
+
+    """
+    fm stats are input to other equations that can be used to rapidly calculate statistics inlcuding:
+        - Coverage
+        - Detection
+        - Criticality, cost etc... of uncovered failure modes
+        - Criticality, cost etc... of undetected failure modes
+    :param pt:
+    :return:
+    """
+
+    num_fm = pt.shape[0]
+    (unique, indexes, inv_indexes, counts) = np.unique(pt, axis=0, return_index=True, return_inverse=True, return_counts=True)
+    return (unique, indexes, inv_indexes, counts, num_fm)
+
+def calc_coverage_np2(counts, num_fm):
+    return np.count_nonzero(counts == 1)/num_fm
+
 def calc_coverage_np(pt):
-    (unique, counts) = np.unique(pt, axis=0, return_counts=True)
+    (unique, indexes, counts) = np.unique(pt, axis=0, return_index=True, return_counts=True)
     return np.count_nonzero(counts == 1)/pt.shape[0]
 
 def calc_detection_np(pt):
@@ -108,6 +126,7 @@ def _flatten_dict_gen(d, parent_key, sep):
 def flatten_dict(d: MutableMapping, parent_key: str = '', sep: str = '.'):
     return dict(_flatten_dict_gen(d, parent_key, sep))
 
+
 class SensorFactory:
     """
     Read in excel document, create python objects and send it to a JSON file for MongoDB, then delete the python objects
@@ -126,12 +145,13 @@ class FmFactory:
     Read in excel document, create python objects and send it to a JSON file for MongoDB, then delete the python objects
     """
     def __init__(self, path, sheetname, collection):
-        df = pd.read_excel(path, sheetname, index_col=0)
+        self.df = pd.read_excel(path, sheetname, index_col=0)
         # assert that all columns of the sensor library are unique (unique uids)
         assert 1==1
-        for column in df:
-            fm = FailureMode(df[column].to_frame())
+        for column in self.df:
+            fm = FailureMode(self.df[column].to_frame())
             obj_2_collection(fm, collection, "_FailureMode__uid")
+
 
 class S_LocFactory:
     """
@@ -145,9 +165,47 @@ class S_LocFactory:
             s_loc = SenseLocation(df[column].to_frame())
             obj_2_collection(s_loc, collection, "_SenseLocation__uid")
 
+
+# class GenomeNode:
+#     """
+#     Node of sensor set optimsation
+#     """
+#     def __init__(self):
+#         self.genome = None # set of indexes that correspond to which sensor/location pairs are chosen for the GA
+#         self.metrics = None # Table of df of all the relevant metrics form  the dataset
+
+
+class SensorSolutionSpace:
+    """
+    Base Object Thate enables sensor set optimsation
+    """
+    def __init__(self):
+        self.pt = None # Numpy Pt of
+        self.loc_sensor_table = None # map s_locs to sensors (assert dimesions match pt)
+        self.expl_loc_sensor_table = None # exploded table, one sensor/location pair per column
+        self.fm_table = None
+
+    # def calc_metrics(self, genome):
+    #     """
+    #
+    #     :param genome: from GenomeNode
+    #     :return: sensor set metrics to GenomeNode
+    #     """
+    #     metrics = None
+    #     return metrics
+
+def genetic_algorithm(sss, depth, epochs):
+    """
+    :param sss: SensorSolutionSpace
+    :param depth: Depth of heap to be inspected
+    :param epochs:
+    :return:
+    """
+    #https://blog.paperspace.com/working-with-different-genetic-algorithm-representations-python/
+
+
 class Sensor:
     """
-    All attributes are private to ensure all editing occurs in the excel database
     """
     def __init__(self, df=None):
         self.__uid = None  #
@@ -173,7 +231,7 @@ class Sensor:
         self.error_code = ""
 
         self.attr_dict = None
-        self.num_metrics = None
+        #self.num_metrics = None
 
         self.metric_table = None
 
@@ -272,23 +330,31 @@ class SenseLocation:
         self._SenseLocation__uid = None
         self.location = None
         self.sense_type = None
-        self.sensor = None
+        self.sensors = []
 
         if df is not None:
             self.dict_2_obj(df)
 
     def dict_2_obj(self, df):
+
         if isinstance(df, pd.DataFrame):
             key = list(df.keys())[0]
             self._SenseLocation__uid = key
             df = df[key]
+            sensor_string_list = df["_Sensor__uid"].split(',')
 
         elif isinstance(df, dict):
             self._SenseLocation__uid = df['_SenseLocation__uid']
+            sensor_string_list = df['_Sensor__uid']
+        else:
+            raise Exception("Invalid")
 
         self.location = df["location"]
         self.sense_type = df["sense_type"]
-        self.sensor = Sensor(sensor_library_collection.find_one({"_Sensor__uid": df["_Sensor__uid"]}))
+        for sensor_string in sensor_string_list:
+            res = sensor_library_collection.find_one({"_Sensor__uid": sensor_string})
+            self.sensors.append(Sensor(res))
+            print("pause")
 
     def obj_2_dict(self):
         # https://stackoverflow.com/questions/61517/python-dictionary-from-an-objects-fields
@@ -296,8 +362,9 @@ class SenseLocation:
             "_SenseLocation__uid": self._SenseLocation__uid,
             "location": self.location,
             "sense_type": self.sense_type,
-            "_Sensor__uid": self.sensor._Sensor__uid
+            "_Sensor__uid": [sensor._Sensor__uid for sensor in self.sensors]
         }
+
 
 class FailureMode:
     def __init__(self, df=None):
@@ -310,8 +377,8 @@ class FailureMode:
         self.cost = None
         self.must_cover = None
         self.must_detect = None
-        self.attr_dict = None
-        self.num_metrics = 6
+        #self.attr_dict = None
+        #self.num_metrics = 6
 
         if df is not None:
             self.dict_2_obj(df)
@@ -325,22 +392,23 @@ class FailureMode:
         elif isinstance(df, dict):
             self._FailureMode__uid = df["_FailureMode__uid"]
 
-        self.diagnostic_group = df["Diagnostic Group"]
-        self.component = df["Component"]
-        self.flow_property = df["Flow Property"]
-        self.criticality = df["Criticality"]
-        self.component = df["Component"]
-        self.cost = df["Cost"]
+        self.diagnostic_group = df["diagnostic_group"]
+        self.component = df["component"]
+        self.flow_property = df["flow_property"]
+        self.criticality = df["criticality"]
+        self.component = df["component"]
+        self.cost = df["cost"]
 
-        assert not (df["Cover"] == df["Detect"] == 1)
-        self.must_cover = df["Cover"]
-        self.must_detect = df["Detect"]
+        assert not (df["must_cover"] == df["must_detect"] == 1)
+        self.must_cover = df["must_cover"]
+        self.must_detect = df["must_detect"]
 
         #self.attr_dict = dict(self.obj_2_dict())
 
     def obj_2_dict(self):
         # https://stackoverflow.com/questions/61517/python-dictionary-from-an-objects-fields
-        return vars(self)
+        return dict(vars(self))
+
 
 class PropagationTable:
     """
@@ -351,6 +419,7 @@ class PropagationTable:
     def __init__(self, name, pt):
         self.name = name
         self.pt = pt
+        self.fm_table = None
         self.length = self.pt.shape[0]
         self.labels = FM_LABELS
         try:
@@ -360,7 +429,7 @@ class PropagationTable:
 
         self.s_loc_list = list(self.pt.columns)
         for el in self.labels: self.s_loc_list.remove(el)
-        failure_modes_list = get_failure_mode_list(self.pt)
+        #failure_modes_list = get_failure_mode_list(self.pt)
 
         self.s_loc = {}
         for s_loc in self.s_loc_list:
@@ -370,7 +439,7 @@ class PropagationTable:
         for s_loc in self.s_loc_list:
             self.sensors[s_loc] = Sensor()
 
-        failure_modes_list = get_failure_mode_list(self.pt)
+        failure_modes_list = self.pt['_FailureMode__uid'] #get_failure_mode_list(self.pt)
         self.failure_modes = {}
         for fm in failure_modes_list:
             self.failure_modes[fm] = FailureMode()
@@ -382,6 +451,8 @@ class PropagationTable:
         # Metrics
         self.coverage = None
         self.detection = None
+        self.undetected_criticality = None
+        self.uncovered_criticality = None
 
         self.pt['group'] = ""
 
@@ -407,9 +478,11 @@ class PropagationTable:
             self.s_loc[s_loc_uid] = SenseLocation(doc)
 
     def add_failure_modes(self, coll):
-        for fm_uid in self.pt["_FailureMode_uid"]:
-            doc = coll.find_one({"_SenseLocation__uid":fm_uid})
+        for fm_uid in self.pt["_FailureMode__uid"]:
+            doc = coll.find_one({"_FailureMode__uid":  fm_uid})
             self.failure_modes[fm_uid] = FailureMode(doc)
+
+        self.build_fm_table()
 
     def calc_metrics(self):
         pass
@@ -428,6 +501,25 @@ class PropagationTable:
 
         return cost, cost/len(self.sensors)
 
+    def build_fm_table(self):
+        i = 0
+        fm_table_dict = {}
+        columns = []
+        keys = []
+        for fm_uid in self.failure_modes:
+            tmp_dic = self.failure_modes[fm_uid].obj_2_dict()
+
+            if i == 0:
+                keys = list(tmp_dic.keys())
+                keys.remove('_FailureMode__uid')
+
+            row_values = list(tmp_dic.values())
+            columns.append(row_values[0])
+            fm_table_dict[row_values[0]] = row_values[1:]
+
+            i += 1
+
+        self.fm_table = pd.DataFrame(fm_table_dict, columns=columns, index=keys)
 
     def calc_stats(self):
         self.calc_detection()
@@ -461,19 +553,22 @@ class PropagationTable:
         :return:
         """
 
-
     def calc_detection(self):
         """
         A failure mode is detectable if any of the sensors in its syndrome are not zero
         :return:
         """
-
         count = 0
+        un_d_crit = 0
         for index, row in self.pt.iterrows():
             # If the sum absolute value of the propagation table row is 0, it is not detectable
             if self.pt.loc[index, self.s_loc_list].abs().sum() == 0:
                 count += 1
+                if self.failure_modes[self.pt.loc[index, "_FailureMode__uid"]].criticality is not None:
+                    un_d_crit += self.failure_modes[self.pt.loc[index, "_FailureMode__uid"]].criticality
+                    print(f"{self.pt.loc[index, '_FailureMode__uid']} criticality == None")
 
+        self.undetected_criticality = un_d_crit
         self.detection = (1 - count / self.length) * 100
 
     def calc_coverage(self):
@@ -484,6 +579,7 @@ class PropagationTable:
         print(self.name)
         #pt = self.pt
         unique = {}
+        un_cov = 0
         for index, row in self.pt.iterrows():
             key = str(np.array(row[self.s_loc_list]))
             if unique.get(key) is None:
@@ -504,23 +600,26 @@ class PropagationTable:
                 for index in unique[key]:
                     print(f"        update {i}")
                     self.pt.loc[index, 'group'] = "G " + str(i)
+                    un_cov += self.failure_modes[self.pt.loc[index, "_FailureMode__uid"]].criticality
             i += 1
 
+        self.uncovered_criticality = un_cov
         self.coverage = (count/self.length)*100
 
     def save_stats(self, writer):
-
         # Create Stats df:
         dic = {}
         dic["Coverage"] = self.coverage
         dic["Detection"] = self.detection
+        dic["Undetected Criticality"] = self.undetected_criticality
+        dic["Uncovered Criticality"] = self.uncovered_criticality
         dic["Num_sense_locations"] = len(self.s_loc_list)
         df = pd.DataFrame(dic, index=[0])
         df.to_excel(writer, self.name + "_stats")
 
 # "C:/Users/61435/OneDrive - PHM Technology/PHM Tech/Research/Testability/PHM_Module"
 sensor_path = "C:/Users/61435/OneDrive - PHM Technology/PHM Tech/Research/Testability/PHM_Module/"
-sensor_filename = "Excel_Gui.xlsx"
+sensor_filename = "Excel_Calculations.xlsx"
 
 # Create open_pyxl doc
 
@@ -542,8 +641,8 @@ pt = PropagationTable("Test", df.copy().replace(np.nan, 0))
 df_sense_loc = pd.read_excel(sensor_path+sensor_filename, "sense_locations", index_col=0)
 
 # Create Custom propagation_tables
-S1 = ['s_loc20','s_loc17','s_loc6','s_loc4','s_loc5','s_loc8','s_loc16','s_loc13','s_loc14','s_loc2']
-S2 = ['s_loc20','s_loc17','s_loc6','s_loc4','s_loc5']
+S1 = ['s_loc20', 's_loc17', 's_loc6',  's_loc4', 's_loc5', 's_loc8', 's_loc16', 's_loc13', 's_loc14','s_loc2']
+S2 = ['s_loc20', 's_loc17', 's_loc6', 's_loc4', 's_loc5']
 
 df_s1 = df[FM_LABELS + S1].copy()
 pt_s1 = PropagationTable("Maurice_SS1", df_s1.replace(np.nan, 0))
@@ -551,8 +650,14 @@ pt_s1 = PropagationTable("Maurice_SS1", df_s1.replace(np.nan, 0))
 df_s2 = df[FM_LABELS + S2].copy()
 pt_s2 = PropagationTable("Maurice_SS2", df_s2.replace(np.nan, 0))
 
-# Save propagation_tables
+# add attributes
+# pt.add_sensors(sensor_library_collection, df)
+pt.add_sense_locations(sensor_location_collection)
+pt.add_failure_modes(failure_mode_collection)
+pt_s1.add_failure_modes(failure_mode_collection)
+pt_s2.add_failure_modes(failure_mode_collection)
 
+# Save propagation_tables
 with pd.ExcelWriter(sensor_path+sensor_filename+"_out"+".xlsx") as writer:
     df_sense_loc.to_excel(writer, "_sense_locations")
     pt.calc_stats()
@@ -568,9 +673,7 @@ with pd.ExcelWriter(sensor_path+sensor_filename+"_out"+".xlsx") as writer:
     pt_s2.save_stats(writer)
 
 
-# pt.add_sensors(sensor_library_collection, df)
-# pt.add_sense_locations(sensor_location_collection)
-# pt.add_failure_modes(failure_mode_collection)
+
 
 
 
