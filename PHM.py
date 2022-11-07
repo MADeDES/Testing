@@ -4,9 +4,6 @@ import pymongo
 import openpyxl
 from collections.abc import MutableMapping
 
-#Constants for proptables
-
-
 FLOW = "Flow Property"
 SYMP = "Symptom"
 BOTH = "Both"
@@ -260,7 +257,7 @@ class Sensor:
 
         elif isinstance(df, dict):
             self.__uid = df["_Sensor__uid"]
-            self.equipment = df["equipment"]
+            self.personnel = df["personnel"]
             self.equipment = df["equipment"]
             self.dimensions = df["dimensions"]
         else:
@@ -330,6 +327,7 @@ class SenseLocation:
         self._SenseLocation__uid = None
         self.location = None
         self.sense_type = None
+        self.sensor_string_list = []
         self.sensors = []
 
         if df is not None:
@@ -341,17 +339,19 @@ class SenseLocation:
             key = list(df.keys())[0]
             self._SenseLocation__uid = key
             df = df[key]
-            sensor_string_list = df["_Sensor__uid"].split(',')
+            self.sensor_string_list = df["_Sensor__uid"].split(',')
 
         elif isinstance(df, dict):
             self._SenseLocation__uid = df['_SenseLocation__uid']
-            sensor_string_list = df['_Sensor__uid']
+            self.sensor_string_list = df['_Sensor__uid']
         else:
             raise Exception("Invalid")
 
         self.location = df["location"]
         self.sense_type = df["sense_type"]
-        for sensor_string in sensor_string_list:
+
+    def get_sensors_from_db(self, sensor_library_collection):
+        for sensor_string in self.sensor_string_list:
             res = sensor_library_collection.find_one({"_Sensor__uid": sensor_string})
             self.sensors.append(Sensor(res))
             print("pause")
@@ -362,9 +362,8 @@ class SenseLocation:
             "_SenseLocation__uid": self._SenseLocation__uid,
             "location": self.location,
             "sense_type": self.sense_type,
-            "_Sensor__uid": [sensor._Sensor__uid for sensor in self.sensors]
+            "_Sensor__uid": self.sensor_string_list,
         }
-
 
 class FailureMode:
     def __init__(self, df=None):
@@ -617,60 +616,6 @@ class PropagationTable:
         df = pd.DataFrame(dic, index=[0])
         df.to_excel(writer, self.name + "_stats")
 
-# "C:/Users/61435/OneDrive - PHM Technology/PHM Tech/Research/Testability/PHM_Module"
-sensor_path = "C:/Users/61435/OneDrive - PHM Technology/PHM Tech/Research/Testability/PHM_Module/"
-sensor_filename = "Excel_Calculations.xlsx"
-
-# Create open_pyxl doc
-
-# Pymongo SetUp Database
-client = pymongo.MongoClient(host="localhost", port=27017)
-MADe_db = client.MADe
-sensor_library_collection = MADe_db.Sensor_Library
-sensor_location_collection = MADe_db.Sensor_Location
-failure_mode_collection = MADe_db.Failure_Mode
-
-# Read in excel files
-SensorFactory(sensor_path+sensor_filename, "sensor_library", sensor_library_collection)
-S_LocFactory(sensor_path+sensor_filename, "sense_locations", sensor_location_collection)
-FmFactory(sensor_path+sensor_filename, "failure_modes", failure_mode_collection)
-
-# # Calc metrics from sensor set
-df = pd.read_excel(sensor_path+sensor_filename, "Proptable")
-pt = PropagationTable("Test", df.copy().replace(np.nan, 0))
-df_sense_loc = pd.read_excel(sensor_path+sensor_filename, "sense_locations", index_col=0)
-
-# Create Custom propagation_tables
-S1 = ['s_loc20', 's_loc17', 's_loc6',  's_loc4', 's_loc5', 's_loc8', 's_loc16', 's_loc13', 's_loc14','s_loc2']
-S2 = ['s_loc20', 's_loc17', 's_loc6', 's_loc4', 's_loc5']
-
-df_s1 = df[FM_LABELS + S1].copy()
-pt_s1 = PropagationTable("Maurice_SS1", df_s1.replace(np.nan, 0))
-
-df_s2 = df[FM_LABELS + S2].copy()
-pt_s2 = PropagationTable("Maurice_SS2", df_s2.replace(np.nan, 0))
-
-# add attributes
-# pt.add_sensors(sensor_library_collection, df)
-pt.add_sense_locations(sensor_location_collection)
-pt.add_failure_modes(failure_mode_collection)
-pt_s1.add_failure_modes(failure_mode_collection)
-pt_s2.add_failure_modes(failure_mode_collection)
-
-# Save propagation_tables
-with pd.ExcelWriter(sensor_path+sensor_filename+"_out"+".xlsx") as writer:
-    df_sense_loc.to_excel(writer, "_sense_locations")
-    pt.calc_stats()
-    pt.save_pt(writer)
-    pt.save_stats(writer)
-
-    pt_s1.calc_stats()
-    pt_s1.save_pt(writer)
-    pt_s1.save_stats(writer)
-
-    pt_s2.calc_stats()
-    pt_s2.save_pt(writer)
-    pt_s2.save_stats(writer)
 
 
 
